@@ -12,7 +12,54 @@ defmodule Ueberauth.Strategy.EVESSO do
 
       config :ueberauth, Ueberauth.Strategy.EVESSO.OAuth,
         client_id: System.get_env("EVESSO_CLIENT_ID"),
-        secret_key: System.get_env("EVESSO_SECRET_KEY")
+        client_secret: System.get_env("EVESSO_SECRET_KEY")
+
+  If you haven't already, create a pipeline and set up routes for your callback handler
+
+      pipeline :auth do
+        Ueberauth.plug "/auth"
+      end
+
+      scope "/auth" do
+        pipe_through [:browser, :auth]
+
+        get "/:provider/callback", AuthController, :callback
+      end
+
+  Create an endpoint for the callback where you will handle the Ueberauth.Auth struct
+
+      defmodule MyApp.AuthController do
+        use MyApp.Web, :controller
+
+        def callback_phase(%{assigns: %{ueberauth_failure: fails}} = conn, _params) do
+          #do things with the failure
+        end
+
+        def callback_phase(%{assigns: %{ueberauth_auth: auth}} = conn, params) do
+          # do things with the auth
+        end
+      end
+
+  You can edit the behaviour of the Strategy by including some options when you register your provider
+
+  To set the `uid_field`
+
+      config :ueberauth, Ueberauth,
+        providers: [
+          evesso: {Ueberauth.Strategy.EVESSO, [uid_field: :character_id]}
+        ]
+
+  Default is `:owner_hash, others available are :character_id and :name
+
+  To set the default scopes:
+
+      config :ueberauth, Ueberauth,
+        providers: [
+          evesso: {Ueberauth.Strategy.EVESSO, [default_scope: "esi-clones.read_implants.v1 esi-characters.read_notifications.v1"]}
+        ]
+
+  Default is empty ("") which doesn't grant any extra permissions beyond public endpoints but enables you to verify character ownership.
+  Scopes are provided as a space-separated list.
   """
   use Ueberauth.Strategy,
     uid_field: :owner_hash,
@@ -21,6 +68,15 @@ defmodule Ueberauth.Strategy.EVESSO do
 
   alias Ueberauth.Auth.{Info, Credentials, Extra}
 
+  @doc """
+  Handles the initial redirect to the EVE SSO authentication page
+
+  To customize the scopes that are requested from SSO include them as part of your url:
+
+      "/auth/evesso?scope=esi-clones.read_implants.v1"
+
+  EVE SSO v2 also requires a `state` param that will be returned and can be used to guard against MITM attacks.
+  """
   def handle_request!(conn) do
     scopes = conn.params["scope"] || option(conn, :default_scope)
     send_redirect_uri = Keyword.get(options(conn), :send_redirect_uri, true)
@@ -39,6 +95,10 @@ defmodule Ueberauth.Strategy.EVESSO do
     redirect!(conn, apply(module, :authorize_url!, [opts]))
   end
 
+  @doc """
+  Handles the callback from EVE SSO. When there is a failure from EVE SSO the failure is included in the
+  `ueberauth_failure` struct. Otherwise the information returned in the token is returned in the Ueberauth.Auth struct.
+  """
   def handle_callback!(%Plug.Conn{params: %{"code" => code}} = conn) do
     module = option(conn, :oauth2_module)
     token = apply(module, :get_token!, [[code: code]])
@@ -52,20 +112,32 @@ defmodule Ueberauth.Strategy.EVESSO do
     end
   end
 
+  @doc """
+  Handles failure of SSO where no auth code is returned
+  """
   def handle_callback!(conn) do
     set_errors!(conn, [error("missing_code", "No code received")])
   end
 
+  @doc """
+  Cleans up the private area of the connection used for passing the raw SSO response around during the callback phase
+  """
   def handle_cleanup!(conn) do
     conn
     |> put_private(:evesso_token, nil)
     |> put_private(:evesso_user, nil)
   end
 
+  @doc """
+  Fetches the uid field from the token payload. This defaults to the option `uid_field` which in turn defaults to `owner_hash`
+  """
   def uid(conn) do
     conn |> option(:uid_field) |> fetch_uid(conn)
   end
 
+  @doc """
+  Includes the credentials from the SSO response.
+  """
   def credentials(conn) do
     token = conn.private.evesso_token
     scope_string = token.other_params["scope"] || ""
@@ -81,6 +153,9 @@ defmodule Ueberauth.Strategy.EVESSO do
     }
   end
 
+  @doc """
+  Fetches the fields to populate the info section of the `Ueberauth.Auth` struct.
+  """
   def info(conn) do
     user = conn.private.evesso_user
 
@@ -89,6 +164,9 @@ defmodule Ueberauth.Strategy.EVESSO do
     }
   end
 
+  @doc """
+  Stores the raw information, including the token, obtained from the SSO callback.
+  """
   def extra(conn) do
     %Extra{
       raw_info: %{
