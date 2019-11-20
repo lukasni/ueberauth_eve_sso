@@ -1,6 +1,12 @@
 defmodule Ueberauth.Strategy.EVESSO.OAuth do
   @moduledoc """
   An implementation of OAuth2 for EVE SSO
+
+  To add your `client_id` and `client_secret` include these values in your configuration.
+
+      config :ueberauth, Ueberauth.Strategy.EVESSO.OAuth,
+        client_id: System.get_env("EVESSO_CLIENT_ID"),
+        client_secret: System.get_env("EVESSO_SECRET_KEY")
   """
   use OAuth2.Strategy
 
@@ -11,6 +17,16 @@ defmodule Ueberauth.Strategy.EVESSO.OAuth do
     token_url: "https://login.eveonline.com/v2/oauth/token"
   ]
 
+  @doc """
+  Construct a client for requests to EVE SSO
+
+  Optionally include any OAuth2 options here to be merged with the defaults.
+
+      Ueberauth.Strategy.EVESSO.OAuth.client(redired_uri: "http://localhost:4000/auth/evesso/callback")
+
+  This will be set up automatically for you in `Ueberauth.Strategy.EVESSO`.
+  These options are only useful for usage outside the normal callback phase of Ueberauth.
+  """
   def client(opts \\ []) do
     config =
       :ueberauth
@@ -25,7 +41,8 @@ defmodule Ueberauth.Strategy.EVESSO.OAuth do
 
     json_library = Ueberauth.json_library()
 
-    OAuth2.Client.new(client_opts)
+    client_opts
+    |> OAuth2.Client.new()
     |> OAuth2.Client.put_serializer("application/json", json_library)
   end
 
@@ -53,6 +70,13 @@ defmodule Ueberauth.Strategy.EVESSO.OAuth do
     client.token
   end
 
+  @doc """
+  Decodes the JWT locally and retrieves the user information held within.
+
+  More work could be done here to actually validate the token, see
+  [ESI docs](https://docs.esi.evetech.net/docs/sso/validating_eve_jwt.html) for details
+
+  """
   def verify(token) do
     with [_ | [body | _]] <- token.access_token |> String.split("."),
          {:ok, json_string} <- Base.decode64(body, padding: false),
@@ -72,6 +96,8 @@ defmodule Ueberauth.Strategy.EVESSO.OAuth do
   end
 
   def get_token(client, params, headers) do
+    # EVE SSO does not like to receive duplicate credentials such as Basic auth header and client_id in the body
+    # OAuth2 adds them to both, so we need to delete the client_id parameter manually
     client
     |> put_header("Accept", "application/json")
     |> OAuth2.Strategy.AuthCode.get_token(params, headers)
