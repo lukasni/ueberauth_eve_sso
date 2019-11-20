@@ -49,7 +49,7 @@ defmodule Ueberauth.Strategy.EVESSO do
           evesso: {Ueberauth.Strategy.EVESSO, [uid_field: :character_id]}
         ]
 
-  Default is `:owner_hash, others available are :character_id and :name
+  Default is `:owner_hash`, others available are `:character_id` and `:name`
 
   To set the default scopes:
 
@@ -196,7 +196,10 @@ defmodule Ueberauth.Strategy.EVESSO do
   end
 
   defp extra_user_info(verify) do
-    character_id = String.replace(verify["sub"], "CHARACTER:EVE:", "") |> String.to_integer()
+    character_id =
+      verify["sub"]
+      |> String.replace("CHARACTER:EVE:", "")
+      |> String.to_integer()
 
     user = %{
       name: verify["name"],
