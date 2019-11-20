@@ -53,6 +53,18 @@ defmodule Ueberauth.Strategy.EVESSO.OAuth do
     client.token
   end
 
+  def verify(token) do
+    with [_ | [body | _]] <- token.access_token |> String.split("."),
+         {:ok, json_string} <- Base.decode64(body, padding: false),
+         {:ok, decoded} <- Ueberauth.json_library().decode(json_string) do
+      {:ok, decoded}
+    else
+      {:error, json_error} -> {:error, json_error}
+      :error -> {:error, "failed to decode base64"}
+      _ -> {:error, "unexpected token format"}
+    end
+  end
+
   # Strategy Callbacks
 
   def authorize_url(client, params) do
@@ -92,6 +104,7 @@ defmodule Ueberauth.Strategy.EVESSO.OAuth do
     unless Keyword.has_key?(config, key) do
       raise "#{inspect(key)} missing from config :ueberauth, Ueberauth.Strategy.EVESSO"
     end
+
     config
   end
 

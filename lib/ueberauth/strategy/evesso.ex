@@ -14,9 +14,10 @@ defmodule Ueberauth.Strategy.EVESSO do
         client_id: System.get_env("EVESSO_CLIENT_ID"),
         secret_key: System.get_env("EVESSO_SECRET_KEY")
   """
-  use Ueberauth.Strategy, uid_field: "CharacterID",
-                          default_scope: "",
-                          oauth2_module: Ueberauth.Strategy.EVESSO.OAuth
+  use Ueberauth.Strategy,
+    uid_field: :owner_hash,
+    default_scope: "",
+    oauth2_module: Ueberauth.Strategy.EVESSO.OAuth
 
   alias Ueberauth.Auth.{Info, Credentials, Extra}
 
@@ -43,7 +44,9 @@ defmodule Ueberauth.Strategy.EVESSO do
     token = apply(module, :get_token!, [[code: code]])
 
     if token.access_token == nil do
-      set_errors!(conn, [error(token.other_params["error"], token.other_params["error_description"])])
+      set_errors!(conn, [
+        error(token.other_params["error"], token.other_params["error_description"])
+      ])
     else
       fetch_user(conn, token)
     end
@@ -60,12 +63,12 @@ defmodule Ueberauth.Strategy.EVESSO do
   end
 
   def uid(conn) do
-    conn |> option(:uid_field) |> to_string() |> fetch_uid(conn)
+    conn |> option(:uid_field) |> fetch_uid(conn)
   end
 
   def credentials(conn) do
     token = conn.private.evesso_token
-    scope_string = (token.other_params["scope"] || "")
+    scope_string = token.other_params["scope"] || ""
     scopes = String.split(scope_string, " ")
 
     %Credentials{
@@ -82,7 +85,7 @@ defmodule Ueberauth.Strategy.EVESSO do
     user = conn.private.evesso_user
 
     %Info{
-      name: user["character_name"],
+      name: user.name
     }
   end
 
@@ -101,14 +104,29 @@ defmodule Ueberauth.Strategy.EVESSO do
 
   defp fetch_user(conn, token) do
     conn = put_private(conn, :evesso_token, token)
-    case Ueberauth.Strategy.EVESSO.OAuth.get(token, "/verify") do
-      {:ok, %OAuth2.Response{status_code: 401, body: _body}} ->
-        set_errors!(conn, [error("token", "unauthorized")])
-      {:ok, %OAuth2.Response{status_code: status_code, body: user}} when status_code in 200..399 ->
-        put_private(conn, :evesso_user, user)
-      {:error, %OAuth2.Error{reason: reason}} ->
-        set_errors!(conn, [error("OAuth2", reason)])
+
+    with {:ok, verified} <- Ueberauth.Strategy.EVESSO.OAuth.verify(token),
+         {:ok, user} <- extra_user_info(verified) do
+      put_private(conn, :evesso_user, user)
+    else
+      {:error, reason} ->
+        set_errors!(conn, error("Verify", reason))
+
+      _err ->
+        set_errors!(conn, error("Verify", "Unexpected error during verification"))
     end
+  end
+
+  defp extra_user_info(verify) do
+    character_id = String.replace(verify["sub"], "CHARACTER:EVE:", "") |> String.to_integer()
+
+    user = %{
+      name: verify["name"],
+      character_id: character_id,
+      owner_hash: verify["owner"]
+    }
+
+    {:ok, user}
   end
 
   defp option(conn, key) do
